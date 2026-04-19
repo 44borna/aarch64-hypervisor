@@ -229,22 +229,16 @@ These are documented in the source too.
 
 - Guest is uniprocessor. `PSCI_CPU_ON` returns `NOT_SUPPORTED`.
 
-## What this project demonstrates
+## Technical coverage
 
-End-to-end understanding of ARMv8-A virtualization extensions: `HCR_EL2`, `VTCR_EL2`, stage-2 translation, VMIDs, `VTTBR_EL2`.
-
-Practical experience with GIC architecture: distributor vs CPU interface vs hypervisor interface, group 0/1, priority arbitration, SPIs vs PPIs vs SGIs, level vs edge triggered.
-
-Debugging a real guest OS interacting with a custom hypervisor. Linux doesn't cooperate. It expects spec-compliant behaviour, and the failure modes are silent hangs rather than error messages.
-
-Working around platform quirks (QEMU TCG here) without losing track of what the architecture spec actually says. The `memory/` directory and the "Known limitations" section above try to keep that honest.
+The hypervisor exercises the ARMv8-A virtualization extensions (`HCR_EL2`, `VTCR_EL2`, stage-2 translation, VMIDs, `VTTBR_EL2`) and the full GICv2 architecture (distributor, CPU interface, hypervisor interface, group 0/1, priority arbitration, SPIs / PPIs / SGIs, level and edge triggered). An unmodified Linux guest sits on top of the GICC emulation and runs through its normal init path.
 
 ## References
 
-- ARM Architecture Reference Manual for A-profile (ARM DDI 0487), especially the D1 chapter on virtualization and the timer / interrupt tables.
-- ARM Generic Interrupt Controller v2 Architecture Specification (ARM IHI 0048).
-- Linux kernel source. `arch/arm64/include/asm/kvm_*.h` and `virt/kvm/arm/*` are worth reading for comparison.
-- [QEMU virt machine docs](https://www.qemu.org/docs/master/system/arm/virt.html).
+- ARM Architecture Reference Manual for A-profile (ARM DDI 0487)
+- ARM Generic Interrupt Controller v2 Architecture Specification (ARM IHI 0048)
+- Linux kernel source (`arch/arm64/include/asm/kvm_*.h`, `virt/kvm/arm/*`)
+- [QEMU virt machine docs](https://www.qemu.org/docs/master/system/arm/virt.html)
 
 ## License
 
