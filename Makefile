@@ -101,10 +101,20 @@ all: $(TARGET_ELF)
 $(BUILD_DIR):
 	@mkdir -p $@
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+# Stamp file that changes whenever HOST_IF changes, so switching
+# between HOST_IF=tcg and HOST_IF=hvf forces a full rebuild without
+# needing a manual `make clean`. Wipe .o files in the recipe so the
+# rebuild happens even when sub-second timestamps collide.
+HOST_IF_STAMP := $(BUILD_DIR)/.host-if-$(HOST_IF)
+$(HOST_IF_STAMP): | $(BUILD_DIR)
+	@echo "HOST_IF=$(HOST_IF), clearing stale objects"
+	@rm -f $(BUILD_DIR)/.host-if-* $(BUILD_DIR)/*.o $(BUILD_DIR)/hypervisor.elf $(BUILD_DIR)/hypervisor.bin
+	@touch $@
+
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(HOST_IF_STAMP) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.S | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.S $(HOST_IF_STAMP) | $(BUILD_DIR)
 	$(CC) $(ASFLAGS) -c $< -o $@
 
 $(TARGET_ELF): $(OBJS) $(LINKER) | $(BUILD_DIR)

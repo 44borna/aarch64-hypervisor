@@ -44,6 +44,12 @@
 #define PL011_BASE        0x09000000UL
 #define PL011_SIZE        0x00001000UL
 
+/* GICv3 placement. Distributor matches the v2 layout so our DTS
+ * values stay consistent; redistributor sits in the gap between
+ * GICD and PL011. Sizes are queried from HVF at runtime. */
+#define GICD_BASE_IPA     0x08000000UL
+#define GICR_BASE_IPA     0x080A0000UL
+
 /* ---------- PL011 register offsets (PrimeCell UART, subset) ---------- */
 
 #define PL011_UARTDR      0x000
@@ -400,6 +406,23 @@ int main(int argc, char **argv) {
     HVC(hv_vm_map(ram, GUEST_RAM_BASE, GUEST_RAM_SIZE,
                   HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC));
 
+    /* Instantiate HVF's GICv3. After this call, IPA ranges for the
+     * distributor + redistributor are reserved; the guest can access
+     * them via MMIO, and ICC_*_EL1 / ICH_*_EL2 sysregs work in the
+     * vCPU once we set ICC_SRE.SRE = 1. */
+    size_t gicd_size = 0, gicr_size = 0;
+    HVC(hv_gic_get_distributor_size(&gicd_size));
+    HVC(hv_gic_get_redistributor_size(&gicr_size));
+    fprintf(stderr, "GIC sizes: distributor=%zu (0x%zx), redistributor=%zu (0x%zx) per vcpu\n",
+            gicd_size, gicd_size, gicr_size, gicr_size);
+
+    hv_gic_config_t gic_cfg = hv_gic_config_create();
+    HVC(hv_gic_config_set_distributor_base(gic_cfg, GICD_BASE_IPA));
+    HVC(hv_gic_config_set_redistributor_base(gic_cfg, GICR_BASE_IPA));
+    HVC(hv_gic_create(gic_cfg));
+    fprintf(stderr, "hv_gic created: distributor @ 0x%lx, redistributor @ 0x%lx\n",
+            GICD_BASE_IPA, GICR_BASE_IPA);
+
     uint64_t entry_pc = load_elf_into(ram, GUEST_RAM_SIZE, argv[1]);
     if (entry_pc == 0) entry_pc = HYP_ENTRY_IPA;
     fprintf(stderr, "entry PC = 0x%llx\n", entry_pc);
@@ -408,6 +431,22 @@ int main(int argc, char **argv) {
     hv_vcpu_exit_t *exit_info = NULL;
     hv_vcpu_config_t vcpu_cfg = hv_vcpu_config_create();
     HVC(hv_vcpu_create(&vcpu, &exit_info, vcpu_cfg));
+
+    /* Set MPIDR_EL1 before anything else: hv_gic binds the per-vCPU
+     * redistributor frame based on affinity, and won't map the IPA
+     * window until MPIDR is known. Uniprocessor: U=1, Aff[3..0]=0. */
+    HVC(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_MPIDR_EL1, 0x80000000UL));
+
+    /* Now it's safe to query the redistributor base to confirm placement. */
+    hv_ipa_t gicr_real = 0;
+    HVC(hv_gic_get_redistributor_base(vcpu, &gicr_real));
+    if (gicr_real != GICR_BASE_IPA) {
+        fprintf(stderr,
+                "GIC redistributor mismatch: expected 0x%lx, got 0x%llx\n",
+                GICR_BASE_IPA, gicr_real);
+        return 1;
+    }
+    fprintf(stderr, "vCPU 0 redistributor @ 0x%llx (matches config)\n", gicr_real);
 
     /* Initial CPU state:
      *   PC   -> _start at 0x40080000
