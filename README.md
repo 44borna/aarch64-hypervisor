@@ -145,6 +145,30 @@ make NVCPU=2 GUEST_KERNEL=~/lab/Image GUEST_INITRAMFS=~/lab/initramfs-combined r
 
 vCPU 0 runs Linux, vCPU 1 runs `src/guest.c`. CNTHP ticks swap them every 50 ms. Note: QEMU TCG stalls CNTHP after a few fires, see [Known limitations](#known-limitations).
 
+### Run under HVF (Apple Silicon, macOS 15+)
+
+Experimental. Uses `Hypervisor.framework` with EL2 nested virtualization. Requires an M3 or later Mac on macOS 15+. Currently boots the hypervisor far enough to print `Hello from EL2` via an emulated PL011, then stops at the first GIC access. GIC emulation on the HVF path is the next piece of work.
+
+```bash
+make run-hvf
+```
+
+Expected output:
+```
+loaded segment 0: PA 0x40080000 size 61568 (file 14544)
+entry PC = 0x40080000
+Starting vCPU at EL2...
+
+Hello from EL2
+
+[host] stopped at GIC MMIO (IPA 0x8000000). GIC emulation is
+       the next step, not implemented in this launcher yet.
+```
+
+The host-side launcher lives in `host/hvf_main.c`. It allocates guest RAM, maps it with `hv_vm_map`, loads `hypervisor.elf`, and runs the vCPU with `el2_enabled = true`. MMIO traps (data aborts on unmapped IPAs) are dispatched to a small decoder that understands the load/store instruction forms our hypervisor emits, then either forwarded to the emulated PL011 or reported as "unhandled".
+
+The QEMU TCG path in the rest of this README is unchanged and remains the reference build.
+
 ### Debug with gdb
 
 ```bash
@@ -179,6 +203,10 @@ docs/
 
 tools/
   build-initramfs.sh  concatenates Alpine's initramfs-virt with our /init overlay
+
+host/
+  hvf_main.c          macOS launcher that boots hypervisor.elf under HVF (EL2 nested virt)
+  hvf.entitlements    com.apple.security.hypervisor entitlement for codesign
 
 memory/
   qemu_tcg_gicv2_virt.md   notes on TCG's GICv2 LR path being broken

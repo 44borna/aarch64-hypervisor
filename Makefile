@@ -71,7 +71,16 @@ else
 RUN_DEPS   := $(TARGET_ELF)
 endif
 
-.PHONY: all run debug clean dump
+# HVF launcher (macOS only). Built with the native clang, not the
+# cross compiler — it's a Mach-O binary that links against
+# Hypervisor.framework and runs on the host, not inside the VM.
+HOST_DIR   := host
+HOST_SRCS  := $(wildcard $(HOST_DIR)/*.c)
+HVF_RUNNER := $(BUILD_DIR)/hvf-runner
+HOST_CC    := clang
+HOST_CFLAGS := -Wall -Wextra -O2 -g -std=c11
+
+.PHONY: all run debug clean dump build-hvf run-hvf
 
 all: $(TARGET_ELF)
 
@@ -111,6 +120,21 @@ run: $(RUN_DEPS)
 
 debug: $(RUN_DEPS)
 	$(QEMU) $(QEMU_FLAGS) -s -S
+
+# ---- HVF path (macOS on Apple Silicon) ----
+
+HVF_ENTITLEMENTS := $(HOST_DIR)/hvf.entitlements
+
+# HVF requires the com.apple.security.hypervisor entitlement, stamped
+# in via codesign. Using ad-hoc signing (-s -) is enough locally.
+$(HVF_RUNNER): $(HOST_SRCS) $(HVF_ENTITLEMENTS) | $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CFLAGS) -framework Hypervisor -o $@ $(HOST_SRCS)
+	codesign --entitlements $(HVF_ENTITLEMENTS) --force -s - $@
+
+build-hvf: $(HVF_RUNNER) $(TARGET_ELF)
+
+run-hvf: $(HVF_RUNNER) $(TARGET_ELF)
+	$(HVF_RUNNER) $(TARGET_ELF)
 
 dump: $(TARGET_ELF)
 	$(CROSS)objdump -d $(TARGET_ELF) | less
