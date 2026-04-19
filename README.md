@@ -245,3 +245,7 @@ Working around platform quirks (QEMU TCG here) without losing track of what the 
 - ARM Generic Interrupt Controller v2 Architecture Specification (ARM IHI 0048).
 - Linux kernel source. `arch/arm64/include/asm/kvm_*.h` and `virt/kvm/arm/*` are worth reading for comparison.
 - [QEMU virt machine docs](https://www.qemu.org/docs/master/system/arm/virt.html).
+
+## License
+
+[MIT](LICENSE). Use, modify, redistribute freely. No warranty.
