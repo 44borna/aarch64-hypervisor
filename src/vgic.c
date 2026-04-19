@@ -15,6 +15,11 @@
 #include "uart.h"
 #include "gic.h"
 
+/* TCG/GICv2 build only. Under HOST_IF=hvf (GIC_VERSION==3) the guest
+ * sees a real GICv3 via HVF's hv_gic and this whole software CPU
+ * interface model goes away; stubs in vgic_v3.c keep the linker happy. */
+#if GIC_VERSION == 2
+
 /* Linux's GIC driver clears GICD_ISENABLER bits for PPIs it doesn't
  * know about, and our EL2 scheduler tick (PPI 26, CNTHP) isn't in the
  * guest DT. Re-assert it whenever we see activity at the CPU interface
@@ -219,3 +224,5 @@ int vgic_mmio(trap_frame_t *tf, unsigned long ipa, unsigned long iss) {
     reassert_pl011_rx();
     return 1;
 }
+
+#endif /* GIC_VERSION == 2 */

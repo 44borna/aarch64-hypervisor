@@ -47,10 +47,24 @@ OBJS   := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(C_SRCS)) \
 # 2 = dual (vCPU0 Linux + vCPU1 Stage-7 bare-metal) with CNTHP round-robin.
 NVCPU ?= 1
 
+# HOST_IF selects the virtualization target the hypervisor is built for.
+#   tcg (default) = QEMU TCG + GICv2. Uses src/gic.c + src/vgic.c.
+#   hvf           = macOS HVF + GICv3. Uses src/gic_v3.c + src/vgic_v3.c.
+# Mapped to -DGIC_VERSION=... for the C code.
+HOST_IF ?= tcg
+ifeq ($(HOST_IF),tcg)
+  GIC_VERSION := 2
+else ifeq ($(HOST_IF),hvf)
+  GIC_VERSION := 3
+else
+  $(error HOST_IF must be 'tcg' or 'hvf' (got '$(HOST_IF)'))
+endif
+
 CFLAGS  := -ffreestanding -fno-stack-protector -fno-pic \
            -mgeneral-regs-only -mcpu=$(CPU) \
            -Wall -Wextra -O2 -g \
            -DNVCPU=$(NVCPU) \
+           -DGIC_VERSION=$(GIC_VERSION) \
            -I$(INC_DIR)
 ASFLAGS := -ffreestanding -mcpu=$(CPU) -g -I$(INC_DIR)
 LDFLAGS := -nostdlib -T $(LINKER)

@@ -23,6 +23,10 @@
 #include "vcpu.h"
 #include "vgic.h"
 
+/* TCG/GICv2 build only. Under HOST_IF=hvf (GIC_VERSION==3) this whole
+ * file compiles to nothing; the v3 counterpart lives in gic_v3.c. */
+#if GIC_VERSION == 2
+
 /* Keep PL011 RXIM + GIC SPI 33 hot on every CNTHP heartbeat — Linux's
  * pl011 driver resets these shortly after boot. Mirrors the helper in
  * vgic.c; duplicated here so the heartbeat path doesn't need to pull
@@ -129,3 +133,5 @@ void gic_handle_physical_irq(struct trap_frame *tf) {
     mmio_w(GICC_BASE_PA, GICC_EOIR, iar);
     uart_puts("[gic] unexpected phys IRQ "); uart_put_hex(intid); uart_puts("\n");
 }
+
+#endif /* GIC_VERSION == 2 */

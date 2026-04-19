@@ -16,6 +16,7 @@ build/
 # Internal planning / roadmap notes (kept locally, not pushed).
 STAGE8_PLAN.md
 ROADMAP.md
+HVF_PLAN.md
 
 # Compiled objects / binaries if they ever escape build/.
 *.o
