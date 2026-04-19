@@ -1,0 +1,103 @@
+/*
+ * Minimal device tree for our Linux-under-hypervisor guest (Stage 8a+).
+ *
+ * Memory map matches what our hypervisor promises via stage-2:
+ *   0x08000000..0x0800FFFF   GICD  (trapped, passthrough)
+ *   0x08010000..0x0801FFFF   GICC  (trapped, fully emulated)
+ *   0x09000000..0x091FFFFF   PL011 UART (identity, passthrough)
+ *   0x48000000..0x57FFFFFF   Guest RAM (identity in stage-2)
+ *     kernel Image loaded at 0x48200000
+ *     DTB                   0x4C000000
+ *     initramfs (8d.1)      0x50000000   [only with HAVE_INITRAMFS]
+ *
+ * `method = "hvc"` for PSCI so Linux's SMP/shutdown calls come to us.
+ *
+ * Preprocessed with cpp before dtc so Makefile can inject
+ * HAVE_INITRAMFS / INITRAMFS_START / INITRAMFS_END.
+ */
+/dts-v1/;
+
+/ {
+    compatible = "linux,dummy-virt";
+    #address-cells = <2>;
+    #size-cells    = <2>;
+    interrupt-parent = <&gic>;
+
+    chosen {
+        /* We layer a tiny CPIO overlay on top of Alpine's initramfs
+         * that provides /init: it mounts /proc /sys /dev, redirects
+         * stdio to /dev/ttyAMA0 (which triggers pl011_startup and
+         * enables RX IRQs), and setsid-execs busybox sh. Alpine's
+         * own /init blocks in nlplug-findfs looking for install
+         * media we don't have. */
+        bootargs    = "earlycon=pl011,0x9000000 console=ttyAMA0 loglevel=8 nokaslr rdinit=/init";
+        stdout-path = "/pl011@9000000";
+#ifdef HAVE_INITRAMFS
+        /* 64-bit addresses (two 32-bit cells each) — arm64 Linux
+         * reads these as u64 at /chosen. */
+        linux,initrd-start = <0x0 INITRAMFS_START>;
+        linux,initrd-end   = <0x0 INITRAMFS_END>;
+#endif
+    };
+
+    cpus {
+        #address-cells = <1>;
+        #size-cells    = <0>;
+
+        cpu@0 {
+            device_type   = "cpu";
+            compatible    = "arm,cortex-a72";
+            reg           = <0>;
+            enable-method = "psci";
+        };
+    };
+
+    memory@48000000 {
+        device_type = "memory";
+        /* 256 MiB starting at 0x48000000. Host QEMU is -m 512M, with
+         * RAM 0x40000000..0x5FFFFFFF; leaving a margin keeps us clear
+         * of the top edge and of the hypervisor region below
+         * 0x48000000. */
+        reg = <0x0 0x48000000 0x0 0x10000000>;
+    };
+
+    psci {
+        compatible = "arm,psci-0.2";
+        method     = "hvc";
+    };
+
+    timer {
+        compatible = "arm,armv8-timer";
+        /* secure-phys, non-secure-phys, virt, hyp  (PPI numbers) */
+        interrupts = <1 13 0xf08>,
+                     <1 14 0xf08>,
+                     <1 11 0xf08>,
+                     <1 10 0xf08>;
+        always-on;
+    };
+
+    gic: interrupt-controller@8000000 {
+        compatible            = "arm,cortex-a15-gic";
+        #interrupt-cells      = <3>;
+        #address-cells        = <2>;
+        #size-cells           = <2>;
+        interrupt-controller;
+        reg = <0x0 0x08000000 0x0 0x10000>,   /* GICD */
+              <0x0 0x08010000 0x0 0x10000>;   /* GICC (stage-2 aliased to GICV) */
+    };
+
+    pl011@9000000 {
+        compatible   = "arm,pl011", "arm,primecell";
+        reg          = <0x0 0x09000000 0x0 0x1000>;
+        /* SPI 1 on QEMU virt is the UART — interrupt type 0 = SPI */
+        interrupts   = <0 1 4>;
+        clocks       = <&uartclk>, <&uartclk>;
+        clock-names  = "uartclk", "apb_pclk";
+    };
+
+    uartclk: uartclk {
+        compatible    = "fixed-clock";
+        #clock-cells  = <0>;
+        clock-frequency = <24000000>;
+    };
+};
