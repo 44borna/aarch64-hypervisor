@@ -33,6 +33,8 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <pthread.h>
+#include <time.h>
 
 /* ---------- guest physical memory layout ---------- */
 
@@ -374,6 +376,32 @@ static void dump_state(hv_vcpu_t vcpu, uint64_t esr, uint64_t ipa) {
     fprintf(stderr, "  CPSR = 0x%016llx\n", cpsr);
 }
 
+/* ---------- GIC → vCPU interrupt bridge ----------
+ *
+ * HVF's hv_gic updates the GIC state (ICC_HPPIR etc.) when an IRQ
+ * becomes pending, but it does NOT automatically assert the IRQ line
+ * to the vCPU. For the vector to fire, we must call
+ * hv_vcpu_set_pending_interrupt(IRQ, true) from the owning thread
+ * before hv_vcpu_run. The bit auto-clears on each run, so we check
+ * every iteration. A background kicker thread fires hv_vcpus_exit
+ * periodically so a WFI'd vCPU gets a chance to re-enter the loop.
+ */
+static hv_vcpu_t g_vcpu_for_exit;
+
+static void *kicker_thread(void *arg) {
+    (void)arg;
+    for (;;) {
+        /* 100 ms is a compromise: slow enough that we don't burn CPU
+         * on spurious IAR reads, fast enough that a pending GIC IRQ
+         * gets picked up reasonably soon. Stages 4+ will replace this
+         * with event-driven kicks (device I/O, timer expiry). */
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = 100 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+        hv_vcpus_exit(&g_vcpu_for_exit, 1);
+    }
+    return NULL;
+}
+
 /* ---------- main ---------- */
 
 int main(int argc, char **argv) {
@@ -459,9 +487,32 @@ int main(int argc, char **argv) {
      * hypervisor's _start doesn't read x0; it's safe to leave zero. */
 
     fprintf(stderr, "Starting vCPU at EL2...\n\n");
+    g_vcpu_for_exit = vcpu;
+    pthread_t th;
+    pthread_create(&th, NULL, kicker_thread, NULL);
+    pthread_detach(th);
 
     for (;;) {
+        /* Bridge: HVF auto-clears the pending-interrupt flag per run,
+         * and hv_gic alone doesn't assert IRQ to the vCPU. Without a
+         * host-side HPPIR readback, we just always pend IRQ before
+         * each run. If the GIC has nothing, the guest's vector handler
+         * reads a spurious IAR (1023) and returns quickly. Safe and
+         * cheap. */
+        hv_vcpu_set_pending_interrupt(vcpu, HV_INTERRUPT_TYPE_IRQ, true);
         HVC(hv_vcpu_run(vcpu));
+
+        /* Log every exit reason we've seen at least once, so we can
+         * spot anything HVF returns that we didn't expect. */
+        {
+            static uint64_t seen;
+            uint32_t r = exit_info->reason;
+            if (r < 64 && !((seen >> r) & 1)) {
+                seen |= (1ULL << r);
+                fprintf(stderr, "[host] first exit with reason=%u\n", r);
+            }
+        }
+
         switch (exit_info->reason) {
         case HV_EXIT_REASON_EXCEPTION: {
             uint64_t esr = exit_info->exception.syndrome;
@@ -498,8 +549,9 @@ int main(int argc, char **argv) {
         }
 
         case HV_EXIT_REASON_CANCELED:
-            fprintf(stderr, "\n[host] vCPU canceled\n");
-            return 0;
+            /* We issued hv_vcpus_exit from a background thread to
+             * give the main loop a chance to inject. Just resume. */
+            continue;
 
         default:
             fprintf(stderr, "\n[host] unknown exit reason %u\n",
