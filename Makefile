@@ -66,7 +66,9 @@ CFLAGS  := -ffreestanding -fno-stack-protector -fno-pic \
            -DNVCPU=$(NVCPU) \
            -DGIC_VERSION=$(GIC_VERSION) \
            -I$(INC_DIR)
-ASFLAGS := -ffreestanding -mcpu=$(CPU) -g -I$(INC_DIR)
+ASFLAGS := -ffreestanding -mcpu=$(CPU) -g \
+           -DGIC_VERSION=$(GIC_VERSION) \
+           -I$(INC_DIR)
 LDFLAGS := -nostdlib -T $(LINKER)
 
 QEMU_FLAGS := -machine $(MACHINE),virtualization=on,gic-version=2 \

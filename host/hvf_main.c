@@ -493,12 +493,6 @@ int main(int argc, char **argv) {
     pthread_detach(th);
 
     for (;;) {
-        /* Bridge: HVF auto-clears the pending-interrupt flag per run,
-         * and hv_gic alone doesn't assert IRQ to the vCPU. Without a
-         * host-side HPPIR readback, we just always pend IRQ before
-         * each run. If the GIC has nothing, the guest's vector handler
-         * reads a spurious IAR (1023) and returns quickly. Safe and
-         * cheap. */
         hv_vcpu_set_pending_interrupt(vcpu, HV_INTERRUPT_TYPE_IRQ, true);
         HVC(hv_vcpu_run(vcpu));
 

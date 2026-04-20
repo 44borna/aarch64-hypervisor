@@ -115,6 +115,84 @@ static void cnthp_disable(void) {
 
 volatile unsigned long gic_v3_cnthp_count;
 
+/* Stage 4: inject a virtual IRQ into an EL1 guest via ICH_LRn_EL2.
+ * Does not return (ERETs into the guest, guest loops WFE). */
+extern void guest_v3_start(void);
+
+static inline void write_ich_hcr_el2(unsigned long v) {
+    __asm__ volatile ("msr S3_4_C12_C11_0, %0" :: "r"(v));
+    __asm__ volatile ("isb");
+}
+static inline void write_ich_vmcr_el2(unsigned long v) {
+    __asm__ volatile ("msr S3_4_C12_C11_7, %0" :: "r"(v));
+    __asm__ volatile ("isb");
+}
+static inline void write_ich_lr0_el2(unsigned long v) {
+    __asm__ volatile ("msr S3_4_C12_C12_0, %0" :: "r"(v));
+    __asm__ volatile ("isb");
+}
+
+/* Compose an ICH_LRn_EL2 value for a Group 1 pending virtual INTID.
+ *   bits  31:0    — vINTID (we use 23:0)
+ *   bits 48:41    — priority (we pack into bit 48+8 per arch)
+ *   bit 60        — Group (1 = Group 1)
+ *   bits 63:62    — State: 01 = pending
+ * Using ARMv8 GICv3 encoding:
+ *   vINTID[31:0], pINTID[41:32], priority[55:48], group[60], state[63:62]
+ */
+static unsigned long make_lr(unsigned intid, unsigned char prio, int group1) {
+    unsigned long v = 0;
+    v |= (unsigned long)(intid & 0xFFFFFF);
+    v |= ((unsigned long)prio) << 48;
+    if (group1) v |= (1UL << 60);
+    v |= (1UL << 62);                        /* State = Pending (01) */
+    return v;
+}
+
+static __attribute__((noreturn)) void stage4_eret_to_guest(void) {
+    /* Set HCR_EL2.IMO = 1 so the guest's ICC_*_EL1 accesses are
+     * virtualized to ICV (our LRn state), and physical IRQs continue
+     * to route to our EL2 vector. Without this, guest IAR reads go to
+     * the physical CPU interface (empty) and return spurious. */
+    {
+        unsigned long hcr;
+        __asm__ volatile ("mrs %0, hcr_el2" : "=r"(hcr));
+        hcr |= (1UL << 4);                               /* IMO */
+        __asm__ volatile ("msr hcr_el2, %0" :: "r"(hcr));
+        __asm__ volatile ("isb");
+    }
+
+    /* Enable the virtual CPU interface for our EL1 guest. */
+    write_ich_hcr_el2(1);                                /* ICH_HCR_EL2.En = 1 */
+
+    /* ICH_VMCR_EL2: populate the guest-visible ICV control state.
+     *   VPMR (bits 31:24) = 0xFF  → accept all priorities
+     *   VENG1 (bit 1)   = 1       → virtual Group 1 IRQs enabled
+     *   VBPR1 (bits 20:18) = 0    → finest grouping
+     *   VEOIM (bit 9)   = 0       → combined EOI
+     */
+    unsigned long vmcr = ((unsigned long)0xFF << 24) | (1UL << 1);
+    write_ich_vmcr_el2(vmcr);
+
+    /* Inject INTID 42 as pending, Group 1, priority 0xA0. SW-triggered
+     * (HW=0). Virtual CPU interface will present this to EL1 guest's
+     * ICV_IAR1_EL1 when it reads. */
+    write_ich_lr0_el2(make_lr(42, 0xA0, 1));
+
+    uart_puts("[gic-v3] LR0 loaded (INTID 42 pending), ERETing to EL1 guest\n");
+
+    /* ERET state:
+     *   ELR_EL2  = guest_v3_start
+     *   SPSR_EL2 = EL1h (M = 0b0101) with DAIF fully masked
+     *              (the guest will daifclr #2 itself once VBAR is live).
+     */
+    unsigned long spsr = 0x3C5UL;
+    __asm__ volatile ("msr elr_el2,  %0" :: "r"((unsigned long)guest_v3_start));
+    __asm__ volatile ("msr spsr_el2, %0" :: "r"(spsr));
+    __asm__ volatile ("isb; eret" ::: "memory");
+    __builtin_unreachable();
+}
+
 void gic_init_el2(void) {
     uart_puts("[gic-v3] init: SRE, redistributor, distributor, CPU interface\n");
 
@@ -129,22 +207,10 @@ void gic_init_el2(void) {
     enable_ppi(IRQ_HTIMER_PPI, 0xA0);
     uart_puts("[gic-v3] PPI 26 (CNTHP) enabled\n");
 
-    /* Unmask IRQs at EL2 and arm CNTHP. The launcher pends IRQ at the
-     * vCPU level every run; real INTIDs land here via the vector, and
-     * spurious (1023) IARs return quickly. */
-    __asm__ volatile ("msr daifclr, #0x2" ::: "memory");
-    cnthp_arm_ms(500);
-    uart_puts("[gic-v3] CNTHP armed; entering WFI loop\n");
-
-    for (unsigned i = 0; i < 1000; i++) {
-        __asm__ volatile ("wfi");
-        if (gic_v3_cnthp_count) {
-            uart_puts("[gic-v3] CNTHP vector fire observed, Stage 3 exit criterion met\n");
-            for (;;) __asm__ volatile ("wfe");
-        }
-    }
-    uart_puts("[gic-v3] WFI loop exhausted without CNTHP fire\n");
-    for (;;) __asm__ volatile ("wfe");
+    /* Stage 4: load ICH_LR0_EL2 with a pending virtual IRQ and ERET
+     * into a minimal EL1 guest. The guest handles the IRQ through
+     * the CPU's virtual CPU interface — no vgic_mmio trap needed. */
+    stage4_eret_to_guest();
 }
 
 void gic_handle_physical_irq(struct trap_frame *tf) {
