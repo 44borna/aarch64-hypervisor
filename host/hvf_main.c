@@ -486,10 +486,16 @@ int main(int argc, char **argv) {
             return 1;
         }
 
-        case HV_EXIT_REASON_VTIMER_ACTIVATED:
-            /* The host has work to do related to the virtual timer.
-             * With no guest timer yet, treat as benign and resume. */
+        case HV_EXIT_REASON_VTIMER_ACTIVATED: {
+            /* Virtual timer fired. HVF wants us to know so we can
+             * inject it into the guest. For now just log + resume;
+             * the guest will re-arm or pick it up on its own. */
+            static unsigned long vt_count;
+            if ((++vt_count & 0xFF) == 1) {
+                fprintf(stderr, "[host] VTIMER_ACTIVATED x%lu\n", vt_count);
+            }
             continue;
+        }
 
         case HV_EXIT_REASON_CANCELED:
             fprintf(stderr, "\n[host] vCPU canceled\n");
