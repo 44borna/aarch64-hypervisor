@@ -1,19 +1,20 @@
 /*
- * Minimal device tree for our Linux-under-hypervisor guest (Stage 8a+).
+ * Minimal device tree for our Linux-under-hypervisor guest.
  *
  * Memory map matches what our hypervisor promises via stage-2:
- *   0x08000000..0x0800FFFF   GICD  (trapped, passthrough)
- *   0x08010000..0x0801FFFF   GICC  (trapped, fully emulated)
- *   0x09000000..0x091FFFFF   PL011 UART (identity, passthrough)
- *   0x48000000..0x57FFFFFF   Guest RAM (identity in stage-2)
+ *   0x08000000..0x0800FFFF   GICD (both v2 and v3)
+ *   0x08010000..0x0801FFFF   GICC (v2 only: CPU interface)
+ *   0x080A0000..0x080BFFFF   GICR (v3 only: redistributor)
+ *   0x09000000..0x091FFFFF   PL011 UART
+ *   0x48000000..0x57FFFFFF   Guest RAM
  *     kernel Image loaded at 0x48200000
  *     DTB                   0x4C000000
- *     initramfs (8d.1)      0x50000000   [only with HAVE_INITRAMFS]
+ *     initramfs (optional)  0x50000000
  *
  * `method = "hvc"` for PSCI so Linux's SMP/shutdown calls come to us.
  *
- * Preprocessed with cpp before dtc so Makefile can inject
- * HAVE_INITRAMFS / INITRAMFS_START / INITRAMFS_END.
+ * Preprocessed with cpp before dtc so the Makefile can inject
+ * HAVE_INITRAMFS / INITRAMFS_START / INITRAMFS_END / GIC_VERSION.
  */
 /dts-v1/;
 
@@ -76,6 +77,21 @@
         always-on;
     };
 
+#if GIC_VERSION == 3
+    gic: interrupt-controller@8000000 {
+        compatible            = "arm,gic-v3";
+        #interrupt-cells      = <3>;
+        #address-cells        = <2>;
+        #size-cells           = <2>;
+        interrupt-controller;
+        /* GICD + redistributor. One redistributor region covers
+         * all (one) CPU; 128 KiB per CPU (two 64 KiB frames). */
+        reg = <0x0 0x08000000 0x0 0x10000>,    /* GICD */
+              <0x0 0x080A0000 0x0 0x20000>;    /* GICR */
+        #redistributor-regions = <1>;
+        redistributor-stride   = <0x0 0x20000>;
+    };
+#else
     gic: interrupt-controller@8000000 {
         compatible            = "arm,cortex-a15-gic";
         #interrupt-cells      = <3>;
@@ -85,6 +101,7 @@
         reg = <0x0 0x08000000 0x0 0x10000>,   /* GICD */
               <0x0 0x08010000 0x0 0x10000>;   /* GICC (stage-2 aliased to GICV) */
     };
+#endif
 
     pl011@9000000 {
         compatible   = "arm,pl011", "arm,primecell";

@@ -109,8 +109,10 @@ $(BUILD_DIR):
 # rebuild happens even when sub-second timestamps collide.
 HOST_IF_STAMP := $(BUILD_DIR)/.host-if-$(HOST_IF)
 $(HOST_IF_STAMP): | $(BUILD_DIR)
-	@echo "HOST_IF=$(HOST_IF), clearing stale objects"
-	@rm -f $(BUILD_DIR)/.host-if-* $(BUILD_DIR)/*.o $(BUILD_DIR)/hypervisor.elf $(BUILD_DIR)/hypervisor.bin
+	@echo "HOST_IF=$(HOST_IF), clearing stale build artifacts"
+	@rm -f $(BUILD_DIR)/.host-if-* $(BUILD_DIR)/*.o \
+	       $(BUILD_DIR)/hypervisor.elf $(BUILD_DIR)/hypervisor.bin \
+	       $(BUILD_DIR)/guest.dtb $(BUILD_DIR)/guest.dts.pp
 	@touch $@
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(HOST_IF_STAMP) | $(BUILD_DIR)
@@ -123,20 +125,21 @@ $(TARGET_ELF): $(OBJS) $(LINKER) | $(BUILD_DIR)
 	$(CC) $(LDFLAGS) $(OBJS) -o $@
 	$(OBJCOPY) -O binary $@ $(TARGET_BIN)
 
-# DTS → DTB via cpp + dtc so the initrd-start/end properties can be
-# toggled via -DHAVE_INITRAMFS=1 without a second source file.
+# DTS → DTB via cpp + dtc. cpp flags carry both the initrd bounds
+# (if present) and GIC_VERSION so guest.dts can pick the right
+# interrupt-controller node under HOST_IF=tcg (v2) vs hvf (v3).
+DTB_CPPFLAGS := -DGIC_VERSION=$(GIC_VERSION)
 ifneq ($(GUEST_INITRAMFS),)
-DTB_CPPFLAGS := -DHAVE_INITRAMFS=1 \
+DTB_CPPFLAGS += -DHAVE_INITRAMFS=1 \
                 -DINITRAMFS_START=$(GUEST_INITRAMFS_ADDR) \
                 -DINITRAMFS_END=$$(( $(GUEST_INITRAMFS_ADDR) + $(INITRAMFS_BYTES) ))
-else
-DTB_CPPFLAGS :=
 endif
 
 # DTB depends on the initramfs file too — its size is baked into
 # linux,initrd-end, so a new initramfs without rebuilding the DTB
-# means Linux unpacks the wrong range.
-$(GUEST_DTB): $(GUEST_DTS) $(GUEST_INITRAMFS) | $(BUILD_DIR)
+# means Linux unpacks the wrong range. It also depends on the
+# HOST_IF stamp because GIC_VERSION determines the GIC node variant.
+$(GUEST_DTB): $(GUEST_DTS) $(GUEST_INITRAMFS) $(HOST_IF_STAMP) | $(BUILD_DIR)
 	$(CC) -E -P -nostdinc -undef -x assembler-with-cpp $(DTB_CPPFLAGS) \
 	  -o $(BUILD_DIR)/guest.dts.pp $<
 	dtc -I dts -O dtb -o $@ $(BUILD_DIR)/guest.dts.pp
